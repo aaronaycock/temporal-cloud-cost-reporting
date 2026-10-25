@@ -1,0 +1,25 @@
+# Temporal Cloud Action metrics are per-second rates, one sample per minute, timestamped about 3 minutes back, and
+# a series stops being emitted while idle. Count Actions by summing raw samples (each sample x 60). Don't use
+# subqueries or instant-vector roll-ups on these metrics: Prometheus reuses the last sample for up to 5 minutes, so an
+# idle series gets counted several times. Scrape every 30s with honor_timestamps: true.
+groups:
+  - name: temporal-cost-alerts
+    interval: 1m
+    rules:
+      # Actions per namespace over the last 24 hours (total_action_count is one series per namespace, so this is cheap)
+      - record: namespace:actions:24h
+        expr: sum by (temporal_namespace) (sum_over_time(temporal_cloud_v1_total_action_count[24h])) * 60
+      # A namespace's last 24h is more than 2x its highest 24h in the prior 30 days, and at least 1M Actions
+      - alert: TemporalActionsSpike
+        expr: |
+          namespace:actions:24h > 2 * max_over_time(namespace:actions:24h[30d:1h] offset 1d)
+          and namespace:actions:24h > 1e6
+  - name: temporal-cost-rollups
+    interval: 1h
+    rules:
+      # Hourly Actions by workflow type. Drops action_type (most of the cardinality); offset waits for late samples.
+      - record: namespace_workflow_type:actions:1h
+        expr: sum by (temporal_namespace, temporal_workflow_type) (sum_over_time(temporal_cloud_v1_billable_action_count[1h] offset 10m)) * 60
+      # Hourly workflow starts by workflow type, for Actions per run
+      - record: namespace_workflow_type:starts:1h
+        expr: sum by (temporal_namespace, temporal_workflow_type) (sum_over_time(temporal_cloud_v1_billable_action_count{action_type="start_workflow"}[1h] offset 10m)) * 60

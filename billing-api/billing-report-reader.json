@@ -1,0 +1,10 @@
+{
+  "name": "billing-report-reader",
+  "description": "Create and download Billing API reports only.",
+  "permissions": [
+    {
+      "actions": ["cloud.billingreport.create", "cloud.billingreport.get"],
+      "resources": { "resource_type": "accounts", "allow_all": true }
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+rule_files: [rules.yml]
+evaluation_interval: 1m
+tests:
+  # Spike alert on continuous daily traffic. 0.5M/day = 5.787037/s, 3M/day = 34.722222/s, 0.1M/day = 1.157407/s, 0.9M/day = 10.416667/s.
+  - interval: 1m
+    input_series:
+      - series: 'temporal_cloud_v1_total_action_count{temporal_namespace="ns-spike"}'
+        values: '5.787037x44639 34.722222x1440'
+      - series: 'temporal_cloud_v1_total_action_count{temporal_namespace="ns-small"}'
+        values: '1.157407x44639 10.416667x1440'
+      - series: 'temporal_cloud_v1_total_action_count{temporal_namespace="ns-repeat"}'
+        values: '5.787037x12959 34.722222x1439 5.787037x30239 34.722222x1440'
+    promql_expr_test:
+      - expr: round(namespace:actions:24h / 1000)
+        eval_time: 30d
+        exp_samples:
+          - labels: '{temporal_namespace="ns-spike"}'
+            value: 500
+          - labels: '{temporal_namespace="ns-small"}'
+            value: 100
+          - labels: '{temporal_namespace="ns-repeat"}'
+            value: 500
+    alert_rule_test:
+      - eval_time: 31d
+        alertname: TemporalActionsSpike
+        exp_alerts: []
+      - eval_time: 32d
+        alertname: TemporalActionsSpike
+        exp_alerts:
+          - exp_labels:
+              temporal_namespace: ns-spike
+  # Sparse emission, the way Temporal Cloud sends it: a series is only present in minutes with Actions.
+  # Ingest runs 1/s and Deliver 3/s for the first 10 minutes of each hour, then nothing.
+  - interval: 1m
+    input_series:
+      - series: 'temporal_cloud_v1_billable_action_count{temporal_namespace="ns-a", temporal_workflow_type="Ingest", action_type="start_workflow"}'
+        values: '1x9 _x49 1x9 _x49 1x9 _x49'
+      - series: 'temporal_cloud_v1_billable_action_count{temporal_namespace="ns-a", temporal_workflow_type="Deliver", action_type="schedule_activity"}'
+        values: '3x9 _x49 3x9 _x49 3x9 _x49'
+      - series: 'temporal_cloud_v1_total_action_count{temporal_namespace="ns-a"}'
+        values: '4x9 _x49 4x9 _x49 4x9 _x49'
+    promql_expr_test:
+      # Raw-sample counts are exact: 3 bursts x 10 minutes x 60s x rate
+      - expr: sum by (temporal_namespace) (sum_over_time(temporal_cloud_v1_total_action_count[3h])) * 60
+        eval_time: 3h
+        exp_samples:
+          - labels: '{temporal_namespace="ns-a"}'
+            value: 7200
+      # The subquery form overcounts idle series: each burst's last sample is reused for 5 more minutes (+50% here)
+      - expr: sum by (temporal_namespace) (sum_over_time(temporal_cloud_v1_total_action_count[3h:1m])) * 60
+        eval_time: 3h
+        exp_samples:
+          - labels: '{temporal_namespace="ns-a"}'
+            value: 10800

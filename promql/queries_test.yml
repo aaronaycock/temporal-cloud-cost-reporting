@@ -1,0 +1,79 @@
+# The workflow-type and Actions-per-run queries from README.md and queries.md, on sparse hourly bursts.
+rule_files: [rules.yml]
+evaluation_interval: 1h  # the roll-up group runs hourly; promtool applies this to every group
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'temporal_cloud_v1_billable_action_count{temporal_namespace="ns-a", temporal_workflow_type="Ingest", action_type="start_workflow"}'
+        values: '1x9 _x49 1x9 _x49 1x9 _x49 1x9 _x49'
+      - series: 'temporal_cloud_v1_billable_action_count{temporal_namespace="ns-a", temporal_workflow_type="Deliver", action_type="schedule_activity"}'
+        values: '3x9 _x49 3x9 _x49 3x9 _x49 3x9 _x49'
+      - series: 'temporal_cloud_v1_billable_action_count{temporal_namespace="ns-b", temporal_workflow_type="Ingest", action_type="start_workflow"}'
+        values: '2x9 _x49 2x9 _x49 2x9 _x49 2x9 _x49'
+    promql_expr_test:
+      # hourly roll-up: 600 Ingest and 1800 Deliver Actions in the hour ending 10 minutes before 2h
+      - expr: namespace_workflow_type:actions:1h
+        eval_time: 2h
+        exp_samples:
+          - labels: 'namespace_workflow_type:actions:1h{temporal_namespace="ns-a", temporal_workflow_type="Ingest"}'
+            value: 600
+          - labels: 'namespace_workflow_type:actions:1h{temporal_namespace="ns-a", temporal_workflow_type="Deliver"}'
+            value: 1800
+          - labels: 'namespace_workflow_type:actions:1h{temporal_namespace="ns-b", temporal_workflow_type="Ingest"}'
+            value: 1200
+      # workflow-type share, [3h] for [7d] to fit the test window
+      - expr: |
+          sum_over_time(namespace_workflow_type:actions:1h[3h])
+          / on (temporal_namespace) group_left
+          sum by (temporal_namespace)
+            (sum_over_time(namespace_workflow_type:actions:1h[3h]))
+        eval_time: 3h30m
+        exp_samples:
+          - labels: '{temporal_namespace="ns-a", temporal_workflow_type="Ingest"}'
+            value: 0.25
+          - labels: '{temporal_namespace="ns-a", temporal_workflow_type="Deliver"}'
+            value: 0.75
+          - labels: '{temporal_namespace="ns-b", temporal_workflow_type="Ingest"}'
+            value: 1
+      # Actions per day by workflow type from the hourly roll-up, [3h] for [24h]
+      - expr: sum_over_time(namespace_workflow_type:actions:1h[3h])
+        eval_time: 3h30m
+        exp_samples:
+          - labels: '{temporal_namespace="ns-a", temporal_workflow_type="Ingest"}'
+            value: 1800
+          - labels: '{temporal_namespace="ns-a", temporal_workflow_type="Deliver"}'
+            value: 5400
+          - labels: '{temporal_namespace="ns-b", temporal_workflow_type="Ingest"}'
+            value: 3600
+  # Actions per run: Ingest does 1 start + 4 Activities per run, Deliver 1 start + 1 Activity.
+  - interval: 1m
+    input_series:
+      - series: 'temporal_cloud_v1_billable_action_count{temporal_namespace="ns-a", temporal_workflow_type="Ingest", action_type="start_workflow"}'
+        values: '1x9 _x49 1x9 _x49 1x9 _x49 1x9 _x49'
+      - series: 'temporal_cloud_v1_billable_action_count{temporal_namespace="ns-a", temporal_workflow_type="Ingest", action_type="schedule_activity"}'
+        values: '4x9 _x49 4x9 _x49 4x9 _x49 4x9 _x49'
+      - series: 'temporal_cloud_v1_billable_action_count{temporal_namespace="ns-a", temporal_workflow_type="Deliver", action_type="start_workflow"}'
+        values: '3x9 _x49 3x9 _x49 3x9 _x49 3x9 _x49'
+      - series: 'temporal_cloud_v1_billable_action_count{temporal_namespace="ns-a", temporal_workflow_type="Deliver", action_type="schedule_activity"}'
+        values: '3x9 _x49 3x9 _x49 3x9 _x49 3x9 _x49'
+    promql_expr_test:
+      # Actions per run from the recording rules, [3h] for [24h]
+      - expr: |
+          sum_over_time(namespace_workflow_type:actions:1h[3h])
+          / sum_over_time(namespace_workflow_type:starts:1h[3h])
+        eval_time: 3h30m
+        exp_samples:
+          - labels: '{temporal_namespace="ns-a", temporal_workflow_type="Ingest"}'
+            value: 5
+          - labels: '{temporal_namespace="ns-a", temporal_workflow_type="Deliver"}'
+            value: 2
+      # Ad hoc Actions per run, as in queries.md (no recording rules), [3h] for [24h]
+      - expr: |
+          sum by (temporal_workflow_type) (sum_over_time(temporal_cloud_v1_billable_action_count{temporal_namespace="ns-a"}[3h]))
+          / sum by (temporal_workflow_type) (sum_over_time(temporal_cloud_v1_billable_action_count{temporal_namespace="ns-a", action_type="start_workflow"}[3h]))
+        eval_time: 3h30m
+        exp_samples:
+          - labels: '{temporal_workflow_type="Ingest"}'
+            value: 5
+          - labels: '{temporal_workflow_type="Deliver"}'
+            value: 2
